@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LocalDebuggerCommandArguments>f3151b0a-70e3-4dfc-8fef-ae4d011a8195</LocalDebuggerCommandArguments>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+    <LocalDebuggerCommandArgumentsHistory>f3151b0a-70e3-4dfc-8fef-ae4d011a8195|</LocalDebuggerCommandArgumentsHistory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LocalDebuggerCommandArguments>f3151b0a-70e3-4dfc-8fef-ae4d011a8195</LocalDebuggerCommandArguments>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+    <LocalDebuggerCommandArgumentsHistory> Interactive Brokers (IBKR)|"Interactive Brokers (IBKR)"|f3151b0a-70e3-4dfc-8fef-ae4d011a8195|</LocalDebuggerCommandArgumentsHistory>
+  </PropertyGroup>
+</Project>
