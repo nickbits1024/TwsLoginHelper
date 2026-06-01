@@ -18,7 +18,7 @@
     <ClCompile Include="TwsLoginHelper.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="AccessBridgeCalls.c">
+    <ClCompile Include="AccessBridgeCalls.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

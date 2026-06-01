@@ -40,7 +40,7 @@
 #include <jni.h>
 
 //#define ACCESSBRIDGE_32
-//#define ACCESSBRIDGE_64
+#define ACCESSBRIDGE_64
 
 #include "AccessBridgeCalls.h"
 

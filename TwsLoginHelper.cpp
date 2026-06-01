@@ -1,34 +1,64 @@
 // TwsLoginHelper.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
-#include <atlbase.h>
-#include <atlstr.h>
+
 #include <tchar.h>
 #include <iostream>
+#include <array>
+#include <functional>
 #include <list>
 #include <string>
-#include <vector>
-#include <functional>
 #include <windows.h>
+#include <vcclr.h>
 #include "AccessBridgeCalls.h"
 
-#pragma warning(disable:6255)
+#pragma warning(disable: 6262)
 
 using namespace std;
+using namespace System;
+using namespace System::Diagnostics;
+using namespace System::Net;
+using namespace System::Text;
+using namespace Newtonsoft::Json;
+using namespace Newtonsoft::Json::Linq;
 
 extern "C" AccessBridgeFPs theAccessBridge;
-string bitwardenId;
-static string sessionKey;
+string g_bitwardenId;
+string g_sessionKey;
+HANDLE g_serveProcessHandle;
+int g_serverPort;
 
-typedef struct BRIDGENODE {
+struct BridgeNode
+{
     long vmId;
     AccessibleContext ctx;
     AccessibleContextInfo info;
-} BridgeNode;
+};
 
 struct FINDTWSWINDOWPARAMS {
     LPCTSTR windowTitle;
     HWND wnd;
 };
+
+JObject^ BwCliGetJson(const string& url)
+{
+    WebClient^ client = gcnew WebClient();
+
+    string url2 = "http://localhost:" + to_string(g_serverPort) + "/" + url;
+    String^ json = client->DownloadString(gcnew String(url2.c_str()));
+
+    return JObject::Parse(json);
+}
+
+JObject^ BwCliPostJson(const string& url)
+{
+    WebClient^ client = gcnew WebClient();
+
+    string url2 = "http://localhost:" + to_string(g_serverPort) + "/" + url;
+
+    String^ json = client->UploadString(gcnew String(url2.c_str()), String::Empty);
+
+    return JObject::Parse(json);
+}
 
 HWND FindTwsWindow(LPCTSTR windowTitle)
 {
@@ -106,6 +136,68 @@ bool FindNode(const list<BridgeNode>& nodes, const wchar_t* name, const wchar_t*
     return false;
 }
 
+std::wstring ToWString(const std::string& s)
+{
+    return std::wstring(s.begin(), s.end());
+}
+
+HANDLE RunBwCommand(const std::string& cmd, const string& sessionKey)
+{
+    //pin_ptr<wchar_t> sessionKeyPtr = PtrToStringChars(sessionKey);
+    //pin_ptr<wchar_t> cmdPtr = PtrToStringChars(cmd);
+
+    wstring bwSession = L"BW_SESSION=" + ToWString(sessionKey);
+
+    wstring env;
+    LPWCH envBlock = GetEnvironmentStringsW();
+    if (envBlock != NULL)
+    {
+        for (LPWCH p = envBlock; *p; )
+        {
+            size_t len = wcslen(p);
+            env.append(p, len + 1); // include null terminator
+            p += len + 1;
+        }
+    }
+    //env.reserve(bwSession.size() + 2);
+    env.append(bwSession);
+    env.push_back('\0'); // End of BW_SESSION variable
+    env.push_back('\0'); // End of the environment block
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+
+    PROCESS_INFORMATION pi{};
+
+    LPCWSTR test = env.c_str();
+
+    //string cmdline = "cmd.exe /C " + cmd;
+    string cmdline = cmd;
+
+    // Create process with custom environment
+    BOOL ok = CreateProcessA(
+        nullptr,                       // app name
+        const_cast<LPSTR>(cmdline.c_str()), // command line
+        nullptr,                       // process security
+        nullptr,                       // thread security
+        TRUE,                          // inherit handles
+        CREATE_UNICODE_ENVIRONMENT, //CREATE_NO_WINDOW,              
+        (LPVOID)env.c_str(),           // environment block
+        nullptr,                       // current directory
+        &si,
+        &pi
+    );
+
+      if (!ok)
+        return nullptr;
+
+    cout << "Started process " << dec << pi.dwProcessId << " for command: " << cmd << endl;
+
+    // We return the process handle; caller must CloseHandle() when done
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
+}
+
 string RunCommandCapture(const string& cmd)
 {
     HANDLE hRead, hWrite;
@@ -121,14 +213,15 @@ string RunCommandCapture(const string& cmd)
 
     PROCESS_INFORMATION pi = {};
 
-    string cmdline = "cmd.exe /C " + cmd;
+    //string cmdline = "cmd.exe /C " + cmd;
+    string cmdline = cmd;
 
     if (!CreateProcessA(
         NULL,
-        cmdline.data(),
+        const_cast<LPSTR>(cmdline.c_str()),
         NULL, NULL,
         TRUE,
-        CREATE_NO_WINDOW,
+        0,
         NULL, NULL,
         &si,
         &pi))
@@ -156,33 +249,44 @@ string RunCommandCapture(const string& cmd)
 
 string ExtractSessionKey(const std::string& output)
 {
-    const std::string marker = "BW_SESSION=\"";
+    const string marker = "BW_SESSION=\"";
     size_t pos = output.find(marker);
-    if (pos == std::string::npos)
+    if (pos == string::npos)
         return "";
 
     pos += marker.size(); // move past BW_SESSION="
 
     size_t end = output.find('"', pos);
-    if (end == std::string::npos)
+    if (end == string::npos)
         return "";
 
     return output.substr(pos, end - pos);
 }
 
-string UnlockAndGetSessionKey()
+string UnlockAndGetSessionKey(HANDLE& serveProcess)
 {
-    if (!sessionKey.empty()) return sessionKey;
+    if (!g_sessionKey.empty()) 
+    {
+        serveProcess = g_serveProcessHandle;
+        return g_sessionKey;
+    }
 
-    string output = RunCommandCapture("bwbio unlock");
+    auto output = RunCommandCapture("cmd /c bwbio unlock");
+    g_sessionKey = ExtractSessionKey(output);
+    if (g_sessionKey.empty())
+    {
+        cerr << "Failed to extract session key from bwbio unlock output" << endl;
+        return "";
+    }
 
-    sessionKey = ExtractSessionKey(output);
+    g_serveProcessHandle = RunBwCommand("bw serve --port " + to_string(g_serverPort), g_sessionKey);
 
-    return sessionKey;
+    return g_sessionKey;
 }
 
 void ClickButton(const BridgeNode& buttonNode)
 {
+    //return;
     jint failure;
     AccessibleActionsToDo todo = { .actionsCount = 1 };
     wcsncpy_s(todo.actions[0].name, _countof(todo.actions[0].name), L"click", _TRUNCATE);
@@ -191,11 +295,9 @@ void ClickButton(const BridgeNode& buttonNode)
 
 void DumpNodes(const list<BridgeNode>& nodes)
 {
-    USES_CONVERSION;
-
     for (const BridgeNode& node : nodes)
     {
-        cout << hex << node.ctx << " name: " << W2A(node.info.name) << " role: " << W2A(node.info.role_en_US) << endl;
+        wcout << hex << node.ctx << " name: " << node.info.name << " role: " << node.info.role_en_US << endl;
     }
 }
 
@@ -219,10 +321,8 @@ void WaitUntilTotpHasAtLeast(int nSeconds)
     }
 }
 
-bool SubmitLogin(const list<BridgeNode>& nodes)
+static bool SubmitLogin(const list<BridgeNode>& nodes)
 {
-    USES_CONVERSION;
-
     BridgeNode loginTextNode;
     BridgeNode passwordTextNode;
     BridgeNode loginButtonNode;
@@ -235,31 +335,43 @@ bool SubmitLogin(const list<BridgeNode>& nodes)
         return false;
     }
 
-    cout << "Found Login Textbox: " << hex << loginTextNode.ctx << " name: " << W2A(loginTextNode.info.name) << endl;
-    cout << "Found Password Textbox: " << hex << passwordTextNode.ctx << " name: " << W2A(passwordTextNode.info.name) << endl;
-    cout << "Found Login Button: " << hex << loginButtonNode.ctx << " name: " << W2A(loginButtonNode.info.name) << endl;
+    wcout << L"Found Login Textbox: " << hex << loginTextNode.ctx << L" name: " << loginTextNode.info.name << endl;
+    wcout << L"Found Password Textbox: " << hex << passwordTextNode.ctx << L" name: " << passwordTextNode.info.name << endl;
+    wcout << L"Found Login Button: " << hex << loginButtonNode.ctx << L" name: " << loginButtonNode.info.name << endl;
 
-    string sessionKey = UnlockAndGetSessionKey();
+    HANDLE serveProcess;
+
+    string sessionKey = UnlockAndGetSessionKey(serveProcess);
+    if (sessionKey.empty()) return true;
 
     cout << "Retrieved session key: " << sessionKey << endl;
 
-    auto username = RunCommandCapture("bw get username " + bitwardenId + " --session " + sessionKey);
-    cout << "Retrieved username: " << username << endl;
-    auto password = RunCommandCapture("bw get password " + bitwardenId + " --session " + sessionKey);
-    cout << "Retrieved password: " << password << endl;
+    auto loginResponse = BwCliGetJson("object/item/" + g_bitwardenId);
 
-    setTextContents(loginTextNode.vmId, loginTextNode.ctx, A2W(username.c_str()));
-    setTextContents(passwordTextNode.vmId, passwordTextNode.ctx, A2W(password.c_str()));
+    //auto username = RunCommandCapture("bw get username " + g_bitwardenId + " --session " + sessionKey);
+    //auto password = RunCommandCapture("bw get password " + g_bitwardenId + " --session " + sessionKey);
+    auto login = loginResponse->Value<JObject^>("data")->Value<JObject^>("login");
+    auto username = login->Value<String^>("username");
+    auto password = login->Value<String^>("password");
+
+    pin_ptr<const wchar_t> usernamePtr = PtrToStringChars(username);
+    pin_ptr<const wchar_t> passwordPtr = PtrToStringChars(password);
+    String^ stars = gcnew String(L'*', password->Length);
+    pin_ptr<const wchar_t> starsPtr = PtrToStringChars(stars);
+
+    wcout << "Retrieved username: " << static_cast<const wchar_t*>(usernamePtr) << endl;
+    wcout << "Retrieved password: " << static_cast<const wchar_t*>(starsPtr) << endl;
+
+    setTextContents(loginTextNode.vmId, loginTextNode.ctx, usernamePtr);
+    setTextContents(passwordTextNode.vmId, passwordTextNode.ctx, passwordPtr);
 
     ClickButton(loginButtonNode);
 
     return true;
 }
 
-bool SubmitAppCode(const list<BridgeNode>& nodes)
+static bool SubmitAppCode(const list<BridgeNode>& nodes)
 {
-    USES_CONVERSION;
-
     BridgeNode appCodeLabelNode;
     BridgeNode appCodeTextNode;
     BridgeNode okButtonNode;
@@ -274,31 +386,55 @@ bool SubmitAppCode(const list<BridgeNode>& nodes)
 
     //DumpNodes(nodes);
 
-    WaitUntilTotpHasAtLeast(5);
+    wcout << L"Found App Code Label: " << hex << appCodeLabelNode.ctx << L" name: " << appCodeLabelNode.info.name << endl;
+    wcout << L"Found App Code Textbox: " << hex << appCodeTextNode.ctx << L" name: " << appCodeTextNode.info.name << endl;
+    wcout << L"Found OK Button: " << hex << okButtonNode.ctx << L" name: " << okButtonNode.info.name << endl;
 
-    cout << "Found App Code Label: " << hex << appCodeLabelNode.ctx << " name: " << W2A(appCodeLabelNode.info.name) << endl;
-    cout << "Found App Code Textbox: " << hex << appCodeTextNode.ctx << " name: " << W2A(appCodeTextNode.info.name) << endl;
-    cout << "Found OK Button: " << hex << okButtonNode.ctx << " name: " << W2A(okButtonNode.info.name) << endl;   
+    HANDLE serveProcess;
+    string sessionKey = UnlockAndGetSessionKey(serveProcess);
+    if (sessionKey.empty()) return true;
+    //string appCode = RunCommandCapture("bw get totp " + g_bitwardenId + " --session " + sessionKey);
 
-    string sessionKey = UnlockAndGetSessionKey();
-    auto appCode = RunCommandCapture("bw get totp " + bitwardenId + " --session " + sessionKey);
-    cout << "App Code: " << appCode << endl;
-    setTextContents(appCodeTextNode.vmId, appCodeTextNode.ctx, A2W(appCode.c_str()));
+    WaitUntilTotpHasAtLeast(2);
+
+    auto totpResponse = BwCliGetJson("object/totp/" + g_bitwardenId);
+    auto appCode = totpResponse->Value<JObject^>("data")->Value<String^>("data");
+
+    pin_ptr<const wchar_t> appCodePtr = PtrToStringChars(appCode);
+    wcout << L"App Code: " << static_cast<const wchar_t*>(appCodePtr) << endl;
+
+    setTextContents(appCodeTextNode.vmId, appCodeTextNode.ctx, appCodePtr);
     ClickButton(okButtonNode);
-    auto locked = RunCommandCapture("bw lock");
-    cout << "Locked Bitwarden CLI: " << locked << endl;
+    //auto locked = RunCommandCapture("bw lock");
+    auto lockedReponse = BwCliPostJson("lock");
 
-    sessionKey.clear();
+    pin_ptr <const wchar_t> lockedJsonPtr = PtrToStringChars(lockedReponse->ToString(Formatting::Indented));
+
+    wcout << L"Locked Bitwarden CLI: " << static_cast<const wchar_t*>(lockedJsonPtr) << endl;
+
+    BOOL terminated = TerminateProcess(g_serveProcessHandle, 0);
+    int error = GetLastError();
+    CloseHandle(g_serveProcessHandle);
+    g_serveProcessHandle = NULL;
+    g_sessionKey.clear();
 
     return true;
 }
 
 bool DoLogin(HWND wnd, LPCSTR windowName, function<bool(const std::list<BridgeNode>&)> func)
 {
+    ULONGLONG start = GetTickCount64();
+
     while (!IsJavaWindow(wnd))
     {
         DoEvents();
         Sleep(500);
+
+        if (GetTickCount64() - start >= 10000)
+        {
+            cout << "Window " << windowName << " is not a Java window after 10 seconds, giving up" << endl;
+            return false;
+        }
     }
 
     cout << "Found " << windowName << ": " << hex << wnd << endl;
@@ -359,13 +495,18 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    bitwardenId = argv[1];
+    g_bitwardenId = argv[1];
 
     if (!initializeAccessBridge()) {
         cerr << "Failed to initialize Access Bridge" << endl;
         return 1;
     }
     theAccessBridge.Windows_run();
+
+    Random^ rand = gcnew Random();
+
+    g_serverPort = rand->Next(10000, 60000);
+    Process::Start("taskkill.exe", "/im bw.exe /f")->WaitForExit();
 
     while (1)
     {
