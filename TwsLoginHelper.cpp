@@ -22,7 +22,7 @@ using namespace Newtonsoft::Json;
 using namespace Newtonsoft::Json::Linq;
 
 extern "C" AccessBridgeFPs theAccessBridge;
-string g_bitwardenId;
+wstring g_bitwardenId;
 string g_sessionKey;
 HANDLE g_serveProcessHandle;
 int g_serverPort;
@@ -39,21 +39,21 @@ struct FINDTWSWINDOWPARAMS {
     HWND wnd;
 };
 
-JObject^ BwCliGetJson(const string& url)
+JObject^ BwCliGetJson(const wstring& url)
 {
     WebClient^ client = gcnew WebClient();
 
-    string url2 = "http://localhost:" + to_string(g_serverPort) + "/" + url;
+    wstring url2 = L"http://localhost:" + to_wstring(g_serverPort) + L"/" + url;
     String^ json = client->DownloadString(gcnew String(url2.c_str()));
 
     return JObject::Parse(json);
 }
 
-JObject^ BwCliPostJson(const string& url)
+JObject^ BwCliPostJson(const wstring& url)
 {
     WebClient^ client = gcnew WebClient();
 
-    string url2 = "http://localhost:" + to_string(g_serverPort) + "/" + url;
+    wstring url2 = L"http://localhost:" + to_wstring(g_serverPort) + L"/" + url;
 
     String^ json = client->UploadString(gcnew String(url2.c_str()), String::Empty);
 
@@ -352,7 +352,7 @@ static bool SubmitLogin(const list<BridgeNode>& nodes)
 
     cout << "Retrieved session key: " << sessionKey << endl;
 
-    auto loginResponse = BwCliGetJson("object/item/" + g_bitwardenId);
+    auto loginResponse = BwCliGetJson(L"object/item/" + g_bitwardenId);
 
     //auto username = RunCommandCapture("bw get username " + g_bitwardenId + " --session " + sessionKey);
     //auto password = RunCommandCapture("bw get password " + g_bitwardenId + " --session " + sessionKey);
@@ -403,7 +403,7 @@ static bool SubmitAppCode(const list<BridgeNode>& nodes)
 
     WaitUntilTotpHasAtLeast(2);
 
-    auto totpResponse = BwCliGetJson("object/totp/" + g_bitwardenId);
+    auto totpResponse = BwCliGetJson(L"object/totp/" + g_bitwardenId);
     auto appCode = totpResponse->Value<JObject^>("data")->Value<String^>("data");
 
     pin_ptr<const wchar_t> appCodePtr = PtrToStringChars(appCode);
@@ -412,7 +412,7 @@ static bool SubmitAppCode(const list<BridgeNode>& nodes)
     setTextContents(appCodeTextNode.vmId, appCodeTextNode.ctx, appCodePtr);
     ClickButton(okButtonNode);
     //auto locked = RunCommandCapture("bw lock");
-    auto lockedReponse = BwCliPostJson("lock");
+    auto lockedReponse = BwCliPostJson(L"lock");
 
     pin_ptr <const wchar_t> lockedJsonPtr = PtrToStringChars(lockedReponse->ToString(Formatting::Indented));
 
@@ -477,7 +477,7 @@ bool DoLogin()
     while ((twsLoginWindow = FindTwsWindow(_T("Login"))) == NULL &&
         (twsAppCodeWindow = FindTwsWindow(_T("Second Factor Authentication"))) == NULL)
     {
-        Sleep(2000);
+        Sleep(1000);
     }
 
     if (twsLoginWindow != NULL)
@@ -493,19 +493,20 @@ bool DoLogin()
 }
 
 
-int main(int argc, char* argv[])
+extern "C" void Main(cli::array<String^>^ args)
 {
-    if (argc != 2)
+    if (args->Length != 2)
     {
         cerr << "Usage: TwsLoginHelper.exe <bitwarden_tws_login_name_or_id>" << endl;
-        return 1;
+        return;
     }
 
-    g_bitwardenId = argv[1];
+    pin_ptr<const wchar_t> bitwardenIdPtr = PtrToStringChars(args[1]);
+    g_bitwardenId = bitwardenIdPtr;
 
     if (!initializeAccessBridge()) {
         cerr << "Failed to initialize Access Bridge" << endl;
-        return 1;
+        return;
     }
     theAccessBridge.Windows_run();
 
@@ -516,8 +517,7 @@ int main(int argc, char* argv[])
 
     while (1)
     {
-        if (!DoLogin()) Sleep(4000);
+        if (!DoLogin()) Sleep(5000);
         Sleep(1000);
     }
 }
-
