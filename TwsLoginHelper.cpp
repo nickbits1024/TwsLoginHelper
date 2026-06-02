@@ -271,6 +271,12 @@ string UnlockAndGetSessionKey(HANDLE& serveProcess)
         return g_sessionKey;
     }
 
+    if (FindWindow(_T("Credential Dialog Xaml Host"), _T("Windows Security")) != NULL)
+    {
+        cerr << "Bitwarden CLI is locked and showing Windows Security prompt, cannot proceed" << endl;
+        return "";
+    }
+
     auto output = RunCommandCapture("cmd /c bwbio unlock");
     g_sessionKey = ExtractSessionKey(output);
     if (g_sessionKey.empty())
