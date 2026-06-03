@@ -5,12 +5,9 @@
     <Platform Name="x86" />
   </Configurations>
   <Folder Name="/Solution Items/">
-    <File Path=".gitignore" />
     <File Path="LICENSE" />
   </Folder>
-  <Project Path="TwsLoginHelper/TwsLoginHelper.vcxproj" Id="2bd0524d-ed54-4571-bde7-e84bcc07c802">
-    <Platform Project="x64" />
-  </Project>
+  <Project Path="TwsLoginHelper.vcxproj" Id="2bd0524d-ed54-4571-bde7-e84bcc07c802" />
   <Project Path="TwsLoginHelperHost/TwsLoginHelperHost.csproj">
     <Platform Project="x64" />
   </Project>
