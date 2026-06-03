@@ -1,5 +1,6 @@
 <Solution>
   <Configurations>
+    <Platform Name="Any CPU" />
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
@@ -7,4 +8,7 @@
     <File Path="LICENSE" />
   </Folder>
   <Project Path="TwsLoginHelper.vcxproj" Id="2bd0524d-ed54-4571-bde7-e84bcc07c802" />
+  <Project Path="TwsLoginHelperHost/TwsLoginHelperHost.csproj">
+    <Platform Project="x64" />
+  </Project>
 </Solution>

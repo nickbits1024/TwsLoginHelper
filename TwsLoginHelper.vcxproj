@@ -91,6 +91,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>Default</LanguageStandard_C>
       <CLRSupport>NetCore</CLRSupport>
+      <AdditionalIncludeDirectories>C:\Program Files\Java\jdk-23\include;C:\Program Files\Java\jdk-23\include\win32;C:\Program Files\Java\jdk-23\include\win32\bridge;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -111,6 +112,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <CLRSupport>NetCore</CLRSupport>
+      <AdditionalIncludeDirectories>C:\Program Files\Java\jdk-23\include;C:\Program Files\Java\jdk-23\include\win32;C:\Program Files\Java\jdk-23\include\win32\bridge;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

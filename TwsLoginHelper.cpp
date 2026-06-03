@@ -87,7 +87,7 @@ HWND FindTwsWindow(LPCTSTR windowTitle)
             return TRUE; // Continue enumeration
             }, reinterpret_cast<LPARAM>(&args));
 
-            return args.wnd;
+        return args.wnd;
     }
 
     return NULL;
@@ -125,7 +125,7 @@ bool FindNode(const list<BridgeNode>& nodes, const wchar_t* name, const wchar_t*
     {
         AccessibleContextInfo info;
         if (!GetAccessibleContextInfo(node.vmId, node.ctx, &info)) continue;
-        if (wcscmp(info.name, name) == 0 && 
+        if (wcscmp(info.name, name) == 0 &&
             wcscmp(info.role_en_US, role) == 0 &&
             (description == NULL || wcscmp(info.description, description) == 0))
         {
@@ -188,7 +188,7 @@ HANDLE RunBwCommand(const std::string& cmd, const string& sessionKey)
         &pi
     );
 
-      if (!ok)
+    if (!ok)
         return nullptr;
 
     cout << "Started process " << dec << pi.dwProcessId << " for command: " << cmd << endl;
@@ -265,7 +265,7 @@ string ExtractSessionKey(const std::string& output)
 
 string UnlockAndGetSessionKey(HANDLE& serveProcess)
 {
-    if (!g_sessionKey.empty()) 
+    if (!g_sessionKey.empty())
     {
         serveProcess = g_serveProcessHandle;
         return g_sessionKey;
@@ -492,32 +492,35 @@ bool DoLogin()
     return false;
 }
 
-
-extern "C" void Main(cli::array<String^>^ args)
+public ref class TwsLoginHelper
 {
-    if (args->Length != 2)
+public:
+    static void Main(cli::array<String^>^ args)
     {
-        cerr << "Usage: TwsLoginHelper.exe <bitwarden_tws_login_name_or_id>" << endl;
-        return;
+        if (args->Length != 1)
+        {
+            cerr << "Usage: TwsLoginHelper.exe <bitwarden_tws_login_name_or_id>" << endl;
+            return;
+        }
+
+        pin_ptr<const wchar_t> bitwardenIdPtr = PtrToStringChars(args[0]);
+        g_bitwardenId = bitwardenIdPtr;
+
+        if (!initializeAccessBridge()) {
+            cerr << "Failed to initialize Access Bridge" << endl;
+            return;
+        }
+        theAccessBridge.Windows_run();
+
+        Random^ rand = gcnew Random();
+
+        g_serverPort = rand->Next(10000, 60000);
+        Process::Start("taskkill.exe", "/im bw.exe /f")->WaitForExit();
+
+        while (1)
+        {
+            if (!DoLogin()) Sleep(5000);
+            Sleep(1000);
+        }
     }
-
-    pin_ptr<const wchar_t> bitwardenIdPtr = PtrToStringChars(args[1]);
-    g_bitwardenId = bitwardenIdPtr;
-
-    if (!initializeAccessBridge()) {
-        cerr << "Failed to initialize Access Bridge" << endl;
-        return;
-    }
-    theAccessBridge.Windows_run();
-
-    Random^ rand = gcnew Random();
-
-    g_serverPort = rand->Next(10000, 60000);
-    Process::Start("taskkill.exe", "/im bw.exe /f")->WaitForExit();
-
-    while (1)
-    {
-        if (!DoLogin()) Sleep(5000);
-        Sleep(1000);
-    }
-}
+};
