@@ -9,14 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="BitwardenVault.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="BitwardenVault.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\TwsLoginHelper\TwsLoginHelper.vcxproj" />
   </ItemGroup>
 

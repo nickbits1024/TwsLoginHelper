@@ -1,83 +1,117 @@
 using System.IO.Pipes;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Bitwarden.Vault;
-
-/// <summary>
-/// Communicates with the running Bitwarden desktop app over its named pipe IPC channel
-/// to perform biometric (Windows Hello) unlock and vault lock operations.
-///
-/// The desktop app must be running with Settings → Browser integration enabled.
-/// No credentials or keys are stored anywhere by this library.
-/// </summary>
 public sealed class BitwardenVault : IDisposable
 {
-    // node-ipc on Windows uses \\.\pipe\tmp-app.bitwarden
-    private const string PipeName = "tmp-app.bitwarden";
+    private readonly string AppId = $"{typeof(BitwardenVault).Name}:{Guid.NewGuid().ToString()}";
+
     private const int ConnectTimeoutMs = 3_000;
-    private const int UnlockTimeoutMs  = 120_000; // user needs time to do biometrics
-    private const int LockTimeoutMs    = 10_000;
 
-    private static int _sequenceCounter;
+    private static int sequenceCounter;
 
-    public void Dispose() { }  // stateless — nothing to dispose
+    private DataJson dataJson;
+    private byte[] userKey;
 
-    // ── Public API ────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Triggers a biometric (Windows Hello) unlock via the Bitwarden desktop app.
-    /// </summary>
-    /// <returns>
-    /// The BW_SESSION key (base64-encoded vault symmetric key) that can be passed
-    /// to the <c>bw</c> CLI via <c>--session</c> or <c>$env:BW_SESSION</c>.
-    /// </returns>
-    /// <exception cref="BitwardenException">
-    /// Thrown when the desktop app is not running, biometrics are declined,
-    /// or any protocol error occurs.
-    /// </exception>
-    public string Unlock()
+    public BitwardenVault()
     {
-        using var session = new IpcSession();
-        session.Connect(PipeName, ConnectTimeoutMs);
-        session.Handshake();
-        return session.BiometricUnlock(UnlockTimeoutMs);
+        dataJson = new DataJson();
     }
 
-    /// <summary>
-    /// Sends a lock command to the Bitwarden desktop app, locking the vault.
-    /// </summary>
-    /// <exception cref="BitwardenException">
-    /// Thrown when the desktop app is not running or fails to acknowledge the lock.
-    /// </exception>
-    public void Lock()
+    public JsonElement GetItem(string itemId) => this.dataJson.GetItem(itemId);
+
+    public string GetLoginProperty(JsonElement item, string name)
     {
-        using var session = new IpcSession();
-        session.Connect(PipeName, ConnectTimeoutMs);
-        session.Handshake();
-        session.LockVault(LockTimeoutMs);
+        if (item.TryGetProperty("key", out var keyElement) == true &&
+            item.TryGetProperty("login", out var loginElement) == true)
+        {
+            var keyBytes = BitwardenEncryption.DecryptBytes(keyElement.ToString(), this.userKey);
+            return GetItemProperty(loginElement, name, encrypted: true, keyBytes);
+        }
+
+        return null;
     }
 
-    // ── IPC session (private) ─────────────────────────────────────────────
+    private string PipeName
+    {
+        get
+        {
+            string homeFolder = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(homeFolder));
+
+            string hex = Convert.ToBase64String(hash).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+
+            return $@"{hex}.s.bw";
+        }
+    }
+
+    private IpcSession CreateIpcSession()
+    {
+        var userId = this.dataJson.GetActiveUserId();
+
+        return new IpcSession(this.AppId, userId);
+    }
+
+    public void Unlock()
+    {
+        using var session = CreateIpcSession();
+        Console.WriteLine($"Connecting to Bitwarden desktop app at {this.PipeName}...");
+        session.Connect(this.PipeName, BitwardenVault.ConnectTimeoutMs);
+        session.Handshake();
+        this.userKey = session.BiometricUnlock() ?? throw new BitwardenException("Login failed", new AuthenticationException());
+    }
+
+    public string GetItemProperty(JsonElement item, string name, bool encrypted = true, byte[] itemKeyBytes = null)
+    {
+        if (item.TryGetProperty(name, out var propElement) == true)
+        {
+            if (encrypted && itemKeyBytes is not null)
+            {
+                //var itemKeyString = item.Value.GetProperty("key").GetString();
+                //var itemKey = VaultCrypto.DecryptBytes(itemKeyString, this.userKey);
+                var itemString = propElement.GetString();
+                var itemValue = BitwardenEncryption.Decrypt(itemString, itemKeyBytes);
+                return itemValue;
+            }
+        }
+        return null;
+    }
+
+    public string GenerateTotp(JsonElement item)
+    {
+        var totpSecret = GetLoginProperty(item, "totp");
+        if (totpSecret == null) return null;
+        var totp = BitwardenEncryption.GenerateTotp(totpSecret);
+
+        return totp;
+    }
+
+    public static string GenerateTotp(string totpSecret) => BitwardenEncryption.GenerateTotp(totpSecret);
 
     private sealed class IpcSession : IDisposable
     {
-        private NamedPipeClientStream? _pipe;
-        private StreamReader?          _reader;
-        private StreamWriter?          _writer;
-        private IpcCrypto?             _crypto;
+        private string appId;
+        private string userId;
+        private NamedPipeClientStream pipe;
+        private BinaryReader reader;
+        private BinaryWriter writer;
+        private BitwardenEncryption crypto;
 
-        // ── Connection ────────────────────────────────────────────────────
+        public IpcSession(string appId, string userId)
+        {
+            this.appId = appId;
+            this.userId = userId;
+        }
 
         public void Connect(string pipeName, int timeoutMs)
         {
-            _pipe = new NamedPipeClientStream(".", pipeName,
-                PipeDirection.InOut, PipeOptions.None);
+            this.pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             try
             {
-                _pipe.Connect(timeoutMs);
+                this.pipe.Connect(timeoutMs);
             }
             catch (Exception ex)
             {
@@ -87,48 +121,39 @@ public sealed class BitwardenVault : IDisposable
                     ex);
             }
 
-            _reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
-            _writer = new StreamWriter(_pipe, Encoding.UTF8, leaveOpen: true)
-            {
-                AutoFlush = true,
-                NewLine   = "\n"
-            };
+            this.reader = new BinaryReader(this.pipe, Encoding.UTF8, leaveOpen: true);
+            this.writer = new BinaryWriter(this.pipe, Encoding.UTF8, leaveOpen: true);
         }
 
-        // ── Handshake (setupEncryption) ───────────────────────────────────
-
-        /// <summary>
-        /// Performs the RSA key-exchange handshake. After this, all further
-        /// messages are sent and received encrypted.
-        /// </summary>
         public void Handshake()
         {
-            // Generate an ephemeral RSA-2048 keypair for this session.
             using var rsa = RSA.Create(2048);
             byte[] pubKeySpki = rsa.ExportSubjectPublicKeyInfo();
 
+            var messageId = NextId();
+
             var setupMsg = new JsonObject
             {
-                ["messageId"] = NextId(),
-                ["command"]   = "setupEncryption",
-                ["publicKey"] = Convert.ToBase64String(pubKeySpki)
+                ["command"] = "setupEncryption",
+                ["publicKey"] = Convert.ToBase64String(pubKeySpki),
+                ["userId"] = this.userId,
+                ["messageId"] = messageId,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
 
-            // setupEncryption is the only plaintext message — send it directly.
             SendRaw(setupMsg);
 
-            // The desktop app replies with { command: "setupEncryption", sharedKey: "<b64>" }
-            // outside of any data envelope (also plaintext).
-            JsonObject reply = ReceiveRaw(ConnectTimeoutMs)
-                ?? throw new BitwardenException("Desktop app closed connection during handshake.");
+            JsonObject reply = ReceiveRaw();
+            if (reply == null)
+                throw new BitwardenException("Desktop app closed connection during handshake.");
 
-            string? sharedKeyB64 = reply["sharedKey"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(sharedKeyB64))
-                throw new BitwardenException(
-                    $"setupEncryption reply missing sharedKey. Got: {reply}");
+            string sharedSecretB64 = reply["sharedSecret"] != null
+                ? reply["sharedSecret"].GetValue<string>()
+                : null;
+            if (string.IsNullOrEmpty(sharedSecretB64))
+                throw new BitwardenException($"setupEncryption reply missing sharedKey. Got: {reply}");
 
-            // Decrypt the shared secret with our private key.
-            byte[] encSharedSecret = Convert.FromBase64String(sharedKeyB64);
+            byte[] encSharedSecret = Convert.FromBase64String(sharedSecretB64);
             byte[] sharedSecret;
             try
             {
@@ -144,233 +169,251 @@ public sealed class BitwardenVault : IDisposable
                 throw new BitwardenException(
                     $"Unexpected shared secret length: {sharedSecret.Length} (expected 64).");
 
-            _crypto = new IpcCrypto(sharedSecret);
+            this.crypto = new BitwardenEncryption(sharedSecret);
 
-            // Zero sensitive material now that it's been consumed.
             CryptographicOperations.ZeroMemory(sharedSecret);
         }
 
-        // ── Commands ──────────────────────────────────────────────────────
-
-        public string BiometricUnlock(int timeoutMs)
+        public byte[] BiometricUnlock()
         {
             EnsureCrypto();
 
-            string userId = DataJson.FindActiveUserId()
-                ?? throw new BitwardenException(
+            var userId = this.userId;
+            if (userId == null)
+                throw new BitwardenException(
                     "Could not determine active userId from Bitwarden data.json. " +
                     "Make sure Bitwarden is logged in.");
 
-            string msgId = NextId();
-            var inner = new JsonObject
+            var msgId = NextId();
+            var message = new JsonObject
             {
                 ["messageId"] = msgId,
-                ["command"]   = "biometricUnlock",
-                ["userId"]    = userId
+                ["command"] = "getBiometricsStatusForUser",
+                ["userId"] = userId,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
+            SendEncrypted(message);
+            var statusResponse = ReceiveEncrypted();
+            if (statusResponse["messageId"]?.GetValue<int>() != msgId)
+                throw new BitwardenException($"Mismatched messageId in biometrics status response. Expected {msgId}, got {statusResponse["messageId"]}.");
 
-            SendEncrypted(msgId, inner);
+            var available = statusResponse["response"]?.GetValue<int>() == 0;
+            if (!available) return null;
 
-            // Desktop app will now prompt Windows Hello — wait up to timeoutMs.
-            JsonObject plainReply = ReceiveEncrypted(timeoutMs, msgId)
-                ?? throw new BitwardenException(
-                    "Timed out waiting for biometricUnlock response. " +
-                    "The user may have cancelled, or the desktop app is unresponsive.");
-
-            string? response = plainReply["response"]?.GetValue<string>();
-            if (response != "unlocked")
-            {
-                string reason = response ?? "(no response field)";
-                throw new BitwardenException(
-                    $"Biometric unlock was not successful. Desktop response: \"{reason}\".");
-            }
-
-            string? keyB64 = plainReply["keyB64"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(keyB64))
-                throw new BitwardenException(
-                    "Unlock succeeded but the response contained no keyB64.");
-
-            return keyB64;
-        }
-
-        public void LockVault(int timeoutMs)
-        {
-            EnsureCrypto();
-
-            string msgId = NextId();
-            var inner = new JsonObject
+            msgId = NextId();
+            message = new JsonObject
             {
                 ["messageId"] = msgId,
-                ["command"]   = "lockVault"
+                ["command"] = "unlockWithBiometricsForUser",
+                ["userId"] = userId,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+            SendEncrypted(message);
+            var unlockResponse = ReceiveEncrypted();
+
+            bool success = unlockResponse["response"].GetValue<bool>();
+            if (!success) return null;
+
+            var userKey = unlockResponse["userKeyB64"].GetValue<string>();
+            var userKeyBytes = Convert.FromBase64String(userKey);
+
+            return userKeyBytes;
+        }
+
+        private void SendEncrypted(JsonObject message)
+        {
+            string json = message.ToJsonString();
+            string encryptedString = this.crypto.Encrypt(json, out var encryptionType, out var iv, out var data, out var mac);
+
+            var encryptedMessage = new JsonObject
+            {
+                //["encryptionType"] = encryptionType,
+                ["encryptedString"] = encryptedString,
+                //["iv"] = iv,
+                //["data"] = data,
+                //["mac"] = mac
             };
 
-            SendEncrypted(msgId, inner);
-
-            // The desktop app may reply with an acknowledgement, or may just
-            // silently close the pipe after locking. Either is acceptable.
-            // We give it a short window and treat silence as success.
-            try
-            {
-                JsonObject? reply = ReceiveEncrypted(timeoutMs, msgId);
-                // reply is informational — any response (or none) means the command was received.
-            }
-            catch (BitwardenException)
-            {
-                // Timeout or disconnect after sending lock is expected and fine.
-            }
+            SendRaw(encryptedMessage);
         }
 
-        // ── Send / receive ────────────────────────────────────────────────
-
-        private void SendEncrypted(string messageId, JsonObject inner)
+        private JsonObject ReceiveEncrypted()
         {
-            string plaintext = inner.ToJsonString();
-            string envelope  = _crypto!.Encrypt(plaintext);
+            JsonObject encryptedReponse = ReceiveRaw();
 
-            var outer = new JsonObject
-            {
-                ["messageId"]        = messageId,
-                ["encryptedCommand"] = envelope
-            };
-            SendRaw(outer);
+            var message = encryptedReponse["message"];
+
+            if (message["encryptionType"].GetValue<int>() != 2) throw new NotSupportedException();
+
+            var encryptedString = message["encryptedString"].GetValue<string>();
+
+            var encryptionType = message["encryptionType"].GetValue<int>();
+            var iv = message["iv"].GetValue<string>();
+            var encryptedData = message["data"].GetValue<string>();
+            var mac = message["mac"].GetValue<string>();
+
+            var json = this.crypto.Decrypt(encryptionType, iv, encryptedData, mac);
+
+            Console.WriteLine("recv decrypted: " + json);
+
+            return JsonObject.Parse(json).AsObject();
         }
 
-        // Receive an encrypted reply whose messageId matches the expected one.
-        // Discards unrelated messages (e.g. status broadcasts).
-        private JsonObject? ReceiveEncrypted(int timeoutMs, string expectedMsgId)
-        {
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-            while (DateTime.UtcNow < deadline)
-            {
-                int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
-                if (remaining <= 0) break;
-
-                JsonObject? outer = ReceiveRaw(remaining);
-                if (outer is null) return null; // pipe closed
-
-                // Prefer encryptedResponse, fall back to encryptedCommand
-                string? enc = outer["encryptedResponse"]?.GetValue<string>()
-                           ?? outer["encryptedCommand"]?.GetValue<string>();
-
-                if (enc is null) continue; // unencrypted broadcast, skip
-
-                string plaintext = _crypto!.Decrypt(enc);
-                JsonObject inner = JsonSerializer.Deserialize<JsonObject>(plaintext)
-                    ?? throw new BitwardenException("Failed to deserialize decrypted reply.");
-
-                string? replyId = inner["messageId"]?.GetValue<string>();
-                if (replyId == expectedMsgId || replyId is null)
-                    return inner;
-
-                // Different messageId — this is a concurrent broadcast; discard and loop.
-            }
-            return null; // timed out
-        }
-
-        // node-ipc on Windows wraps every message in { "type": "message", "data": <payload> }\n
         private void SendRaw(JsonObject msg)
         {
             var envelope = new JsonObject
             {
-                ["type"] = "message",
-                ["data"] = JsonNode.Parse(msg.ToJsonString())
+                ["appId"] = this.appId,
+                ["message"] = msg
             };
-            _writer!.WriteLine(envelope.ToJsonString());
+            var json = envelope.ToJsonString();
+            var jsonBytes = Encoding.UTF8.GetBytes(json);
+
+            this.writer.Write((uint)jsonBytes.Length);
+            this.writer.Write(jsonBytes);
+            this.writer.Flush();
+            this.pipe.Flush();
+
+            Console.WriteLine($"send {jsonBytes.Length}: {envelope.ToJsonString()}");
         }
 
-        // Returns null on EOF/disconnect. Blocks until data arrives or timeoutMs elapses.
-        private JsonObject? ReceiveRaw(int timeoutMs)
+        private JsonObject ReceiveRaw()
         {
-            // NamedPipeClientStream is synchronous; we run the read on a task
-            // so we can respect the timeout without blocking forever.
-            var cts = new CancellationTokenSource(timeoutMs);
-            try
-            {
-                string? line = Task.Run(() => _reader!.ReadLine(), cts.Token)
-                                   .GetAwaiter().GetResult();
+            uint byteCount = this.reader.ReadUInt32();
+            byte[] jsonBytes = this.reader.ReadBytes((int)byteCount);
+            string json = Encoding.UTF8.GetString(jsonBytes);
 
-                if (line is null) return null;
-                line = line.Trim();
-                if (line.Length == 0) return null;
+            Console.WriteLine($"recv {byteCount}: {json}");
 
-                JsonNode root = JsonNode.Parse(line)
-                    ?? throw new BitwardenException("Received null JSON from pipe.");
+            JsonNode message = JsonNode.Parse(json);
+            if (message == null)
+                throw new BitwardenException("Received null JSON from pipe.");
 
-                // Unwrap node-ipc envelope if present
-                JsonNode? data = root["data"];
-                return (data ?? root).AsObject();
-            }
-            catch (OperationCanceledException)
-            {
-                return null; // timeout
-            }
+            return message.AsObject();
         }
 
         private void EnsureCrypto()
         {
-            if (_crypto is null)
+            if (this.crypto == null)
                 throw new InvalidOperationException(
                     "Handshake not completed. Call Handshake() before sending commands.");
         }
 
         public void Dispose()
         {
-            _writer?.Dispose();
-            _reader?.Dispose();
-            _pipe?.Dispose();
+            this.writer?.Dispose();
+            this.reader?.Dispose();
+            this.pipe?.Dispose();
         }
     }
 
-    // ── Crypto (AES-256-CBC + HMAC-SHA256) ───────────────────────────────────
-    //
-    // Shared secret layout (64 bytes received from desktop app after RSA decrypt):
-    //   [0..31]  → AES-256 key
-    //   [32..63] → HMAC-SHA256 key
-    //
-    // Encrypted envelope format: "<base64 IV>|<base64 ciphertext>|<base64 HMAC>"
-    // HMAC is computed over (IV || ciphertext).
-
-    private sealed class IpcCrypto
+    private sealed class BitwardenEncryption
     {
         private readonly byte[] _aesKey;
         private readonly byte[] _macKey;
 
-        public IpcCrypto(byte[] sharedSecret)
+        public BitwardenEncryption(byte[] sharedSecret)
         {
             _aesKey = sharedSecret[..32];
             _macKey = sharedSecret[32..];
         }
 
-        public string Encrypt(string plaintext)
+        public string Encrypt(string message, out int encryptionType, out string ivString, out string dataString, out string macString)
         {
-            byte[] data = Encoding.UTF8.GetBytes(plaintext);
+            byte[] data = Encoding.UTF8.GetBytes(message);
 
             using var aes = Aes.Create();
             aes.Key = _aesKey;
             aes.GenerateIV();
-            byte[] iv     = aes.IV;
+            byte[] iv = aes.IV;
             byte[] cipher = aes.EncryptCbc(data, iv, PaddingMode.PKCS7);
 
             byte[] macInput = [.. iv, .. cipher];
-            using var hmac  = new HMACSHA256(_macKey);
-            byte[] mac      = hmac.ComputeHash(macInput);
+            using var hmac = new HMACSHA256(_macKey);
+            byte[] mac = hmac.ComputeHash(macInput);
 
-            return $"{Convert.ToBase64String(iv)}|{Convert.ToBase64String(cipher)}|{Convert.ToBase64String(mac)}";
+            encryptionType = 2; // AesCbc256_HmacSha256_B64
+            ivString = Convert.ToBase64String(iv);
+            dataString = Convert.ToBase64String(cipher);
+            macString = Convert.ToBase64String(mac);
+
+            return $"{encryptionType}.{ivString}|{dataString}|{macString}";
         }
 
-        public string Decrypt(string envelope)
+        public string Decrypt(string encryptedString)
         {
-            string[] parts = envelope.Split('|');
-            if (parts.Length != 3)
-                throw new BitwardenException($"Malformed encrypted envelope: \"{envelope}\"");
+            var parts = encryptedString.Split('|');
+            var parts2 = parts[0].Split('.');
+            int encryptionType = int.Parse(parts2[0]);
+            var iv = parts2[1];
+            var data = parts[1];
+            var mac = parts[2];
 
-            byte[] iv     = Convert.FromBase64String(parts[0]);
+            return Decrypt(encryptionType, iv, data, mac);
+        }
+
+        public static byte[] DecryptBytes(string encryptedString, byte[] key)
+        {
+            // Split "2.iv|data|mac"
+            var dot = encryptedString.IndexOf('.');
+            var type = encryptedString.Substring(0, dot);
+
+            if (type != "2")
+                throw new NotSupportedException($"EncString type {type}");
+
+            var parts = encryptedString[(dot + 1)..].Split('|');
+
+            byte[] iv = Convert.FromBase64String(parts[0]);
             byte[] cipher = Convert.FromBase64String(parts[1]);
-            byte[] mac    = Convert.FromBase64String(parts[2]);
+            byte[] mac = Convert.FromBase64String(parts[2]);
 
-            byte[] macInput  = [.. iv, .. cipher];
-            using var hmac   = new HMACSHA256(_macKey);
-            byte[] expected  = hmac.ComputeHash(macInput);
+            byte[] aesKey = key[..32];
+            byte[] hmacKey = key[32..64];
+
+            // Verify MAC
+            using (var hmac = new HMACSHA256(hmacKey))
+            {
+                byte[] macInput = new byte[iv.Length + cipher.Length];
+
+                Buffer.BlockCopy(iv, 0, macInput, 0, iv.Length);
+                Buffer.BlockCopy(cipher, 0, macInput, iv.Length, cipher.Length);
+
+                byte[] computed = hmac.ComputeHash(macInput);
+
+                if (!CryptographicOperations.FixedTimeEquals(computed, mac))
+                    throw new CryptographicException("MAC verification failed");
+            }
+
+            using var aes = Aes.Create();
+
+            aes.Key = aesKey;
+            aes.IV = iv;
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+
+            using var decryptor = aes.CreateDecryptor();
+
+            byte[] decryptedBytes = decryptor.TransformFinalBlock(cipher, 0, cipher.Length);
+
+            return decryptedBytes;
+        }
+
+        public static string Decrypt(string encryptedString, byte[] key)
+        {
+            return Encoding.UTF8.GetString(DecryptBytes(encryptedString, key));
+        }
+
+        public string Decrypt(int encryptionType, string ivString, string dataString, string macString)
+        {
+            if (encryptionType != 2) throw new NotSupportedException();
+
+            byte[] iv = Convert.FromBase64String(ivString);
+            byte[] cipher = Convert.FromBase64String(dataString);
+            byte[] mac = Convert.FromBase64String(macString);
+
+            byte[] macInput = [.. iv, .. cipher];
+            using var hmac = new HMACSHA256(_macKey);
+            byte[] expected = hmac.ComputeHash(macInput);
 
             if (!CryptographicOperations.FixedTimeEquals(mac, expected))
                 throw new BitwardenException("Encrypted message MAC verification failed.");
@@ -380,20 +423,78 @@ public sealed class BitwardenVault : IDisposable
             byte[] plain = aes.DecryptCbc(cipher, iv, PaddingMode.PKCS7);
             return Encoding.UTF8.GetString(plain);
         }
+
+        private static byte[] Base32Decode(string input)
+        {
+            const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+            input = input
+                .Trim()
+                .Replace("=", "")
+                .Replace(" ", "")
+                .ToUpperInvariant();
+
+            List<byte> output = new();
+
+            int buffer = 0;
+            int bitsLeft = 0;
+
+            foreach (char c in input)
+            {
+                int value = alphabet.IndexOf(c);
+
+                if (value < 0)
+                    throw new FormatException($"Invalid Base32 character: {c}");
+
+                buffer = (buffer << 5) | value;
+                bitsLeft += 5;
+
+                while (bitsLeft >= 8)
+                {
+                    bitsLeft -= 8;
+                    output.Add((byte)((buffer >> bitsLeft) & 0xFF));
+                }
+            }
+
+            return output.ToArray();
+        }
+
+        public static string GenerateTotp(string secret, int digits = 6) => GenerateTotp(Base32Decode(secret), digits);
+
+        public static string GenerateTotp(byte[] secret, int digits = 6)
+        {
+            long timestep = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30;
+
+            byte[] counter = BitConverter.GetBytes(timestep);
+
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(counter);
+
+            using var hmac = new HMACSHA1(secret);
+
+            byte[] hash = hmac.ComputeHash(counter);
+
+            int offset = hash[^1] & 0x0F;
+
+            int binary =
+                ((hash[offset] & 0x7F) << 24) |
+                ((hash[offset + 1] & 0xFF) << 16) |
+                ((hash[offset + 2] & 0xFF) << 8) |
+                (hash[offset + 3] & 0xFF);
+
+            int otp = binary % (int)Math.Pow(10, digits);
+
+            return otp.ToString(new string('0', digits));
+        }
     }
 
-    // ── data.json helper ─────────────────────────────────────────────────────
-    //
-    // Reads the active userId from whichever Bitwarden data.json is present.
-    //
-    // Newer layout (desktop app / browser extension, 2023+):
-    //   { "global_account_activeUserId": "<userId>", "<userId>": { ... } }
-    //
-    // Older layout (some CLI versions):
-    //   { "userId": "<userId>", ... }
-
-    private static class DataJson
+    private class DataJson : IDisposable
     {
+        private JsonDocument doc;
+        private string userId;
+
+        private JsonElement ciphersElement;
+
         private static readonly string[] SearchPaths =
         [
             Path.Combine(
@@ -401,43 +502,57 @@ public sealed class BitwardenVault : IDisposable
                 "Bitwarden", "data.json"),
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Bitwarden CLI", "data.json"),
+                "Bitwarden CLI", "data.json")
         ];
 
-        public static string? FindActiveUserId()
+        public DataJson()
+        {
+            LoadJson();
+        }
+
+        public void Dispose()
+        {
+            this.doc?.Dispose();
+            this.userId = null;
+        }
+
+        private void LoadJson()
         {
             foreach (string path in SearchPaths)
             {
                 if (!File.Exists(path)) continue;
                 try
                 {
-                    using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                    JsonElement root = doc.RootElement;
+                    this.doc = JsonDocument.Parse(File.ReadAllText(path));
 
-                    // New layout
-                    if (root.TryGetProperty("global_account_activeUserId", out var newId))
-                    {
-                        string? id = newId.GetString();
-                        if (!string.IsNullOrEmpty(id)) return id;
-                    }
+                    var root = this.doc.RootElement;
 
-                    // Old layout
-                    if (root.TryGetProperty("userId", out var oldId))
+                    if (root.TryGetProperty("global_account_activeAccountId", out JsonElement idElement))
                     {
-                        string? id = oldId.GetString();
-                        if (!string.IsNullOrEmpty(id)) return id;
+                        this.userId = idElement.GetString();
+
+                        this.ciphersElement = root.GetProperty($"user_{userId}_ciphers_ciphers");
                     }
                 }
                 catch { /* corrupt / locked file — try next path */ }
             }
-            return null;
+        }
+
+        public string GetActiveUserId() => this.userId ?? throw new InvalidDataException();
+
+        public JsonElement GetItem(string itemId)
+        {
+            return this.ciphersElement.TryGetProperty(itemId, out var propertyElement) ? propertyElement : default;
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static int NextId() => Interlocked.Increment(ref BitwardenVault.sequenceCounter);
 
-    private static string NextId() =>
-        $"bv-{Interlocked.Increment(ref _sequenceCounter)}";
+    public void Dispose()
+    {
+        if (this.userKey is not null) CryptographicOperations.ZeroMemory(this.userKey);
+        this.dataJson?.Dispose();
+    }
 }
 
 /// <summary>
