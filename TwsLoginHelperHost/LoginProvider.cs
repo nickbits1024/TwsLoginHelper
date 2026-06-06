@@ -8,9 +8,9 @@ internal class LoginProvider : ILoginProvider
 {
     private string itemId;
 
-    public LoginProvider(string itemId)
+    public LoginProvider(Guid itemId)
     {
-        this.itemId = itemId;
+        this.itemId = itemId.ToString();
     }
 
     public LoginDetails GetLogin()

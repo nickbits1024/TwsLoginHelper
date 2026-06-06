@@ -8,6 +8,9 @@
 
 using namespace std;
 using namespace System;
+using namespace System::IO;
+using namespace System::Diagnostics;
+using namespace System::Reflection;
 
 extern "C" AccessBridgeFPs theAccessBridge;
 
@@ -21,20 +24,20 @@ private:
 public:
     property String^ Username
     {
-        String^ get() { return this->username; }
-        void set(String^ value) { this->username = value; }
+        String ^ get() { return this->username; }
+        void set(String ^ value) { this->username = value; }
     }
 
-    property String^ Password
+        property String^ Password
     {
-        String^ get() { return this->password; }
-        void set(String^ value) { this->password = value; }
+        String ^ get() { return this->password; }
+        void set(String ^ value) { this->password = value; }
     }
 
-    property String^ TotpSecret
+        property String^ TotpSecret
     {
-        String^ get() { return this->totpSecret; }
-        void set(String^ value) { this->totpSecret = value; }
+        String ^ get() { return this->totpSecret; }
+        void set(String ^ value) { this->totpSecret = value; }
     }
 
 };
@@ -98,22 +101,6 @@ void DoEvents()
     {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
-    }
-}
-
-void WalkNodes(long vmId, AccessibleContext ctx, list<BridgeNode>& nodes)
-{
-    nodes.push_back({ vmId, ctx });
-    BridgeNode& node = nodes.back();
-
-    if (!GetAccessibleContextInfo(vmId, ctx, &node.info)) return;
-    for (int i = 0; i < node.info.childrenCount; ++i)
-    {
-        AccessibleContext childCtx = GetAccessibleChildFromContext(vmId, ctx, i);
-        if (childCtx != 0)
-        {
-            WalkNodes(vmId, childCtx, nodes);
-        }
     }
 }
 
@@ -249,6 +236,23 @@ static bool SubmitAppCode(const list<BridgeNode>& nodes, ILoginProvider^ loginPr
     return true;
 }
 
+void WalkNodes(long vmId, AccessibleContext ctx, list<BridgeNode>& nodes)
+{
+    nodes.push_back({ vmId, ctx });
+    BridgeNode& node = nodes.back();
+
+    if (!GetAccessibleContextInfo(vmId, ctx, &node.info)) return;
+
+    for (int i = 0; i < node.info.childrenCount; ++i)
+    {
+        AccessibleContext childCtx = GetAccessibleChildFromContext(vmId, ctx, i);
+        if (childCtx != 0)
+        {
+            WalkNodes(vmId, childCtx, nodes);
+        }
+    }
+}
+
 template <typename TCallback>
 bool DoLogin(HWND wnd, LPCSTR windowName, TCallback func, ILoginProvider^ loginProvider, LoginDetails^& lastLoginDetails)
 {
@@ -293,7 +297,7 @@ bool DoLogin(HWND wnd, LPCSTR windowName, TCallback func, ILoginProvider^ loginP
 
 static bool DoLogin(ILoginProvider^ loginProvider, LoginDetails^& lastLoginDetails)
 {
-    cout << "Waiting for TWS Login Window..." << endl;
+    cout << "Waiting for TWS Window..." << endl;
 
     HWND twsLoginWindow = NULL;
     HWND twsAppCodeWindow = NULL;
@@ -305,7 +309,8 @@ static bool DoLogin(ILoginProvider^ loginProvider, LoginDetails^& lastLoginDetai
 
     if (twsLoginWindow != NULL)
     {
-        return DoLogin(twsLoginWindow, "TWS Login", SubmitLogin, loginProvider, lastLoginDetails);
+        DoLogin(twsLoginWindow, "TWS Login", SubmitLogin, loginProvider, lastLoginDetails);
+        return false;
     }
     if (twsAppCodeWindow != NULL)
     {
@@ -318,26 +323,58 @@ static bool DoLogin(ILoginProvider^ loginProvider, LoginDetails^& lastLoginDetai
 public ref class TwsLoginHelper
 {
 public:
-    static void Run(cli::array<String^>^ args, ILoginProvider^ loginProvider)
+    static void Login(ILoginProvider^ loginProvider)
     {
-        if (args->Length != 1)
-        {
-            cerr << "Usage: TwsLoginHelper.exe <bitwarden_tws_login_name_or_id>" << endl;
-            return;
-        }
+        LoginDetails^ lastLoginDetails;
 
         if (!initializeAccessBridge()) {
             cerr << "Failed to initialize Access Bridge" << endl;
             return;
         }
-        theAccessBridge.Windows_run();
 
-        LoginDetails^ lastLoginDetails;
+        try
+        {
+            while (!DoLogin(loginProvider, lastLoginDetails))
+            {
+                Sleep(1000);
+                DoEvents();
+            }
+        }
+        finally
+        {
+            shutdownAccessBridge();
+        }
 
+        cout << "Login cycle complete" << endl;
+    }
+
+    static void Run(Guid vaultId)
+    {
         while (1)
         {
-            if (!DoLogin(loginProvider, lastLoginDetails)) Sleep(5000);
-            Sleep(1000);
+            cout << "Waiting for TWS Login window..." << endl;
+            while (FindTwsWindow(L"Login") == NULL)
+            {
+                Sleep(1000);
+            }
+
+            String^ hostPath = Path::ChangeExtension(Assembly::GetEntryAssembly()->Location, ".exe");
+
+            Process^ proc = Process::Start(hostPath, "--login --vault-id " + vaultId);
+
+            if (!proc->WaitForExit(TimeSpan::FromMinutes(1LL)))
+            {
+                cout << "Login did not complete, terminating process" << endl;
+                proc->Kill(true);
+            }
+            else
+            {
+                while (Process::GetProcessesByName("tws")->Length > 0)
+                {
+                    cout << "Waiting for TWS to exit" << endl;
+                    Sleep(10000);
+                }
+            }
         }
     }
 };

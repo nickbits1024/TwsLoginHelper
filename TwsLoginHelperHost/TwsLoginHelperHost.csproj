@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Commandline" Version="2.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\TwsLoginHelper\TwsLoginHelper.vcxproj" />
   </ItemGroup>
 
