@@ -128,8 +128,5 @@
     <ClCompile Include="AccessBridgeCalls.cpp" />
     <ClCompile Include="TwsBridge.cpp" />
   </ItemGroup>
-  <ItemGroup>
-    <None Include="packages.config" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
