@@ -20,6 +20,7 @@
     <CLRSupport>NetCore</CLRSupport>
     <TargetFramework>net10.0-windows</TargetFramework>
     <EnableManagedPackageReferenceSupport>true</EnableManagedPackageReferenceSupport>
+    <ProjectName>TwsBridge</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
@@ -125,7 +126,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AccessBridgeCalls.cpp" />
-    <ClCompile Include="TwsLoginHelper.cpp" />
+    <ClCompile Include="TwsBridge.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
