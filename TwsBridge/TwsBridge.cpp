@@ -362,18 +362,12 @@ public:
 
             Process^ proc = Process::Start(hostPath, "--login --vault-id " + vaultId);
 
-            if (!proc->WaitForExit(TimeSpan::FromMinutes(1LL)))
+            proc->WaitForExit();
+
+            while (Process::GetProcessesByName("tws")->Length > 0)
             {
-                cout << "Login did not complete, terminating process" << endl;
-                proc->Kill(true);
-            }
-            else
-            {
-                while (Process::GetProcessesByName("tws")->Length > 0)
-                {
-                    cout << "Waiting for TWS to exit" << endl;
-                    Sleep(10000);
-                }
+                cout << "Waiting for TWS to exit" << endl;
+                Sleep(10000);
             }
         }
     }
