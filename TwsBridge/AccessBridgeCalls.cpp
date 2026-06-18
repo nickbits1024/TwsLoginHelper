@@ -39,8 +39,7 @@
 #include <windows.h>
 #include <jni.h>
 
-//#define ACCESSBRIDGE_32
-#define ACCESSBRIDGE_64
+#define ACCESSBRIDGE_ARCH_64
 
 #include "AccessBridgeCalls.h"
 

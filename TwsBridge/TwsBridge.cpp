@@ -364,10 +364,11 @@ public:
 
             proc->WaitForExit();
 
+            cout << "Waiting for TWS to exit" << endl;
+
             while (Process::GetProcessesByName("tws")->Length > 0)
             {
-                cout << "Waiting for TWS to exit" << endl;
-                Sleep(10000);
+                Sleep(1000);
             }
         }
     }

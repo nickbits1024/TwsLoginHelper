@@ -60,10 +60,10 @@ internal class Program
         vault.Unlock();
 
         var login = vault.GetItem(args[0]);
-     
+
         var username = vault.GetLoginProperty(login, "username");
         var password = vault.GetLoginProperty(login, "password");
-        var totp = vault.GetTotp(login);
+        var totp = vault.GenerateTotp(login);
     }
 #endif
 }

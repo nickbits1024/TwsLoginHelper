@@ -6,6 +6,7 @@
   </Configurations>
   <Folder Name="/Solution Items/">
     <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
     <File Path="LICENSE" />
   </Folder>
   <Project Path="TwsBridge/TwsBridge.vcxproj" Id="2bd0524d-ed54-4571-bde7-e84bcc07c802">
