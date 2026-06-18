@@ -9,6 +9,8 @@ internal class Program
 #if true
     public static void Main(string[] args)
     {
+        JavaAccessBridge.Initialize();
+
         var vaultIdOption = new Option<Guid>("--vault-id") { Description = "Bitwarden Vault ID", Required = true };
 
         var loginCommand = new Command("--login", "Perform login immediately and exit")

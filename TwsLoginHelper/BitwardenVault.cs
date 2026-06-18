@@ -276,7 +276,7 @@ public sealed class BitwardenVault : IDisposable
             this.pipe.Flush();
 
             //Console.WriteLine($"send {jsonBytes.Length}: {envelope.ToJsonString()}");
-            Console.WriteLine($"Bitwarden: sent {jsonBytes} bytes");
+            Console.WriteLine($"Bitwarden: sent {jsonBytes.Length} bytes");
         }
 
         private JsonObject ReceiveRaw()
@@ -286,7 +286,7 @@ public sealed class BitwardenVault : IDisposable
             string json = Encoding.UTF8.GetString(jsonBytes);
 
             //Console.WriteLine($"recv {byteCount}: {json}");
-            Console.WriteLine($"Bitwarden: read {byteCount} bytes");
+            Console.WriteLine($"Bitwarden: read {jsonBytes.Length} bytes");
 
             JsonNode message = JsonNode.Parse(json);
             if (message == null)
