@@ -13,6 +13,8 @@ internal class LoginProvider : ILoginProvider
         this.itemId = itemId.ToString();
     }
 
+    public string VaultItemId => this.itemId;
+
     public LoginDetails GetLogin()
     {
         using BitwardenVault bitwardenVault = new BitwardenVault();

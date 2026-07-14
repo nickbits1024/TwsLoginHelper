@@ -69,7 +69,7 @@ extern "C" {
         theAccessBridgeInstance = LoadLibrary(_T("WINDOWSACCESSBRIDGE"));
 #endif
 #endif
-        printf("Java WindowAccessBridge-64.dll: %016llx\r\n", (intptr_t)theAccessBridgeInstance);
+        System::Console::WriteLine("Java WindowAccessBridge-64.dll: %016llx", (intptr_t)theAccessBridgeInstance);
 
         if (theAccessBridgeInstance != 0) {
             LOAD_FP(Windows_run, Windows_runFP, "Windows_run");

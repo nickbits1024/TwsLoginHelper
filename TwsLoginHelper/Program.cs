@@ -7,9 +7,13 @@ using System.CommandLine.Invocation;
 internal class Program
 {
 #if true
+    static FakeConsoleWindow console;
+
     public static void Main(string[] args)
     {
         JavaAccessBridge.Initialize();
+
+        Program.console = new FakeConsoleWindow("TWS Login Helper");
 
         var vaultIdOption = new Option<Guid>("--vault-id") { Description = "Bitwarden Vault ID", Required = true };
 
@@ -28,10 +32,12 @@ internal class Program
         {
             var vaultId = result.GetRequiredValue(vaultIdOption);
 
-            TwsLoginHelper.Login(new LoginProvider(vaultId));
+            var twsHelper = new TwsLoginHelper(new LoginProvider(vaultId));
+
+            twsHelper.Login();
         });
 
-        var rootCommand = new RootCommand("TWS helper")
+        var rootCommand = new RootCommand("TWS Login Helper")
         {
             vaultIdOption,
             loginCommand
@@ -47,7 +53,9 @@ internal class Program
         {
             var vaultId = result.GetRequiredValue(vaultIdOption);
 
-            TwsLoginHelper.Run(vaultId);
+            var twsHelper = new TwsLoginHelper(new LoginProvider(vaultId));
+
+            twsHelper.Run();
         });
 
         var result = rootCommand.Parse(args);

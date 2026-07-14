@@ -30,7 +30,7 @@ public static class JavaAccessBridge
     {
         const string regPath = @"tws\shell\open\command";
         using var key = Registry.ClassesRoot.OpenSubKey(regPath);
-        string? command = key?.GetValue(null) as string;
+        string command = key?.GetValue(null) as string;
 
         if (string.IsNullOrWhiteSpace(command)) return 0;
 

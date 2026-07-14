@@ -24,19 +24,19 @@ private:
 public:
     property String^ Username
     {
-        String ^ get() { return this->username; }
+        String^ get() { return this->username; }
         void set(String ^ value) { this->username = value; }
     }
 
-        property String^ Password
+    property String^ Password
     {
-        String ^ get() { return this->password; }
+        String^ get() { return this->password; }
         void set(String ^ value) { this->password = value; }
     }
 
-        property String^ TotpSecret
+    property String^ TotpSecret
     {
-        String ^ get() { return this->totpSecret; }
+        String^ get() { return this->totpSecret; }
         void set(String ^ value) { this->totpSecret = value; }
     }
 
@@ -45,6 +45,10 @@ public:
 
 public interface class ILoginProvider
 {
+    property String^ VaultItemId
+    {
+        String ^ get();
+    }
     LoginDetails^ GetLogin();
     String^ GetTotp(String^ totpSecret);
 };
@@ -134,7 +138,7 @@ void DumpNodes(const list<BridgeNode>& nodes)
 {
     for (const BridgeNode& node : nodes)
     {
-        wcout << hex << node.ctx << " name: " << node.info.name << " role: " << node.info.role_en_US << endl;
+        Console::WriteLine(String::Format(gcnew String("{0:X} name: {1} role: {2} "), node.ctx, gcnew String(node.info.name), gcnew String(node.info.role_en_US)));
     }
 }
 
@@ -145,12 +149,12 @@ void WaitUntilTotpHasAtLeast(int nSeconds)
         time_t now = time(nullptr);
         int remaining = 30 - (now % 30);
 
-        cout << "TOTP has " << remaining << "s remaining" << endl;
+        Console::WriteLine("TOTP has " + remaining + "s remaining");
 
         if (remaining >= nSeconds)
             return;
 
-        cout << "Waiting " << remaining + 1 << "s for next TOTP interval";
+        Console::WriteLine("Waiting " + remaining + 1 + "s for next TOTP interval");
 
         // Not enough time left — wait until next window
         int sleepMs = (remaining + 1) * 1000; // +1 to cross boundary safely
@@ -172,9 +176,9 @@ static bool SubmitLogin(const list<BridgeNode>& nodes, ILoginProvider^ loginProv
         return false;
     }
 
-    wcout << L"Found Login Textbox: " << hex << loginTextNode.ctx << L" name: " << loginTextNode.info.name << endl;
-    wcout << L"Found Password Textbox: " << hex << passwordTextNode.ctx << L" name: " << passwordTextNode.info.name << endl;
-    wcout << L"Found Login Button: " << hex << loginButtonNode.ctx << L" name: " << loginButtonNode.info.name << endl;
+    Console::WriteLine(String::Format("Found Login Textbox: {0:X}, name: {1}",  loginTextNode.ctx, gcnew String(loginTextNode.info.name)));
+    Console::WriteLine(String::Format("Found Password Textbox: {0:X} name: {1}", passwordTextNode.ctx, gcnew String(passwordTextNode.info.name)));
+    Console::WriteLine(String::Format("Found Login Button: {0:X} name: {1}", loginButtonNode.ctx, gcnew String(loginButtonNode.info.name)));
 
     if (loginDetails == nullptr)
     {
@@ -187,8 +191,8 @@ static bool SubmitLogin(const list<BridgeNode>& nodes, ILoginProvider^ loginProv
     String^ stars = gcnew String(L'*', loginDetails->Password->Length);
     pin_ptr<const wchar_t> starsPtr = PtrToStringChars(stars);
 
-    wcout << "Retrieved username: " << static_cast<const wchar_t*>(usernamePtr) << endl;
-    wcout << "Retrieved password: " << static_cast<const wchar_t*>(starsPtr) << endl;
+    Console::WriteLine(String::Format("Retrieved username: {0}", gcnew String(static_cast<const wchar_t*>(usernamePtr))));
+    Console::WriteLine(String::Format("Retrieved password: {0}", gcnew String(static_cast<const wchar_t*>(starsPtr))));
 
     setTextContents(loginTextNode.vmId, loginTextNode.ctx, usernamePtr);
     setTextContents(passwordTextNode.vmId, passwordTextNode.ctx, passwordPtr);
@@ -214,9 +218,9 @@ static bool SubmitAppCode(const list<BridgeNode>& nodes, ILoginProvider^ loginPr
 
     //DumpNodes(nodes);
 
-    wcout << L"Found App Code Label: " << hex << appCodeLabelNode.ctx << L" name: " << appCodeLabelNode.info.name << endl;
-    wcout << L"Found App Code Textbox: " << hex << appCodeTextNode.ctx << L" name: " << appCodeTextNode.info.name << endl;
-    wcout << L"Found OK Button: " << hex << okButtonNode.ctx << L" name: " << okButtonNode.info.name << endl;
+    Console::WriteLine(String::Format("Found App Code Label: {0:X} name: {1}", appCodeLabelNode.ctx, gcnew String(appCodeLabelNode.info.name)));
+    Console::WriteLine(String::Format("Found App Code Textbox: {0:X} name: {1}", appCodeTextNode.ctx, gcnew String(appCodeTextNode.info.name)));
+    Console::WriteLine(String::Format("Found OK Button: {0:X} name: {1}", okButtonNode.ctx, gcnew String(okButtonNode.info.name)));
 
     WaitUntilTotpHasAtLeast(1);
 
@@ -227,7 +231,7 @@ static bool SubmitAppCode(const list<BridgeNode>& nodes, ILoginProvider^ loginPr
     if (loginDetails == nullptr) return false;
 
     pin_ptr<const wchar_t> appCodePtr = PtrToStringChars(loginProvider->GetTotp(loginDetails->TotpSecret));
-    wcout << L"App Code: " << static_cast<const wchar_t*>(appCodePtr) << endl;
+    Console::WriteLine(String::Format("App Code: {0}", gcnew String(static_cast<const wchar_t*>(appCodePtr))));
 
     setTextContents(appCodeTextNode.vmId, appCodeTextNode.ctx, appCodePtr);
     ClickButton(okButtonNode);
@@ -265,25 +269,25 @@ bool DoLogin(HWND wnd, LPCSTR windowName, TCallback func, ILoginProvider^ loginP
 
         if (GetTickCount64() - start >= 10000)
         {
-            cout << "Window " << windowName << " is not a Java window after 10 seconds, giving up" << endl;
+            Console::WriteLine(String::Format("Window {0} is not a Java window after 10 seconds, giving up", gcnew String(windowName)));
             return false;
         }
     }
 
-    cout << "Found " << windowName << ": " << hex << wnd << endl;
+    Console::WriteLine(String::Format("Found {0} {0:X}", gcnew String(windowName), (IntPtr)wnd));
 
     long vmId;
     AccessibleContext ctx;
 
     if (!GetAccessibleContextFromHWND(wnd, &vmId, &ctx)) return true;
 
-    cout << "Got VM for TWS Login Window: " << hex << vmId << endl;
+    Console::WriteLine(String::Format("Got VM for TWS Login Window: {0:X}", vmId));
 
     list<BridgeNode> nodes;
 
     WalkNodes(vmId, ctx, nodes);
 
-    cout << "Total nodes found: " << dec << nodes.size() << endl;
+    Console::WriteLine(String::Format("Total nodes found: {0}", nodes.size()));
 
     func(nodes, loginProvider, lastLoginDetails);
 
@@ -297,7 +301,7 @@ bool DoLogin(HWND wnd, LPCSTR windowName, TCallback func, ILoginProvider^ loginP
 
 static bool DoLogin(ILoginProvider^ loginProvider, LoginDetails^& lastLoginDetails)
 {
-    cout << "Waiting for TWS Window..." << endl;
+    Console::WriteLine("Waiting for TWS Window...");
 
     HWND twsLoginWindow = NULL;
     HWND twsAppCodeWindow = NULL;
@@ -322,13 +326,21 @@ static bool DoLogin(ILoginProvider^ loginProvider, LoginDetails^& lastLoginDetai
 
 public ref class TwsLoginHelper
 {
+private:
+    ILoginProvider^ loginProvider;
+
 public:
-    static void Login(ILoginProvider^ loginProvider)
+    TwsLoginHelper(ILoginProvider^ loginProvider)
+    {
+        this->loginProvider = loginProvider;
+    }
+
+    void Login()
     {
         LoginDetails^ lastLoginDetails;
 
         if (!initializeAccessBridge()) {
-            cerr << "Failed to initialize Access Bridge" << endl;
+            Console::Error->WriteLine("Failed to initialize Access Bridge");
             return;
         }
 
@@ -345,26 +357,34 @@ public:
             shutdownAccessBridge();
         }
 
-        cout << "Login cycle complete" << endl;
+        Console::WriteLine("Login cycle complete");
     }
 
-    static void Run(Guid vaultId)
+    void Run()
     {
         while (1)
         {
-            cout << "Waiting for TWS Login window..." << endl;
+            Console::WriteLine("Waiting for TWS Login window...");
             while (FindTwsWindow(L"Login") == NULL)
             {
                 Sleep(1000);
             }
 
-            String^ hostPath = Path::ChangeExtension(Assembly::GetEntryAssembly()->Location, ".exe");
+            if (IsDebuggerPresent())
+            {
+                Login();
+            }
+            else
+            {
 
-            Process^ proc = Process::Start(hostPath, "--login --vault-id " + vaultId);
+                String^ hostPath = Path::ChangeExtension(Assembly::GetEntryAssembly()->Location, ".exe");
 
-            proc->WaitForExit();
+                Process^ proc = Process::Start(hostPath, "--login --vault-id " + this->loginProvider->VaultItemId);
 
-            cout << "Waiting for TWS to exit" << endl;
+                proc->WaitForExit();
+            }
+
+            Console::WriteLine("Waiting for TWS to exit");
 
             while (Process::GetProcessesByName("tws")->Length > 0)
             {
