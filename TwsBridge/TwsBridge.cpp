@@ -384,7 +384,7 @@ public:
                 proc->WaitForExit();
             }
 
-            Console::WriteLine("Waiting for TWS to exit");
+            Console::WriteLine("Waiting for TWS to exit...");
 
             while (Process::GetProcessesByName("tws")->Length > 0)
             {
